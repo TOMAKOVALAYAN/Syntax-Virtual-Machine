@@ -1,0 +1,85 @@
+unit SVM.Common;
+
+interface
+
+const
+  // SVM Dosya Ýmzasý (Magic Number: "aminoglu")
+  SVM_MAGIC: array[0..7] of Byte = (97, 109, 105, 110, 111, 103, 108, 117);
+
+  // Versiyon Bilgisi
+  SVM_VER_MAJOR = 1;
+  SVM_VER_MINOR = 0;
+
+type
+  { SVM Ýþlem Kodlarý (Opcodes) }
+  TSVMOpcode = (
+    // --- Temel Ýþlemler ($00 - $0D) ---
+    opNOP     = $00,  // Ýþlem yapma
+    opPUSH_I  = $01,  // Yýðýna tam sayý (Int64) koy
+    opPUSH_F  = $02,  // Yýðýna ondalýklý sayý (Double) koy
+    opPUSH_S  = $03,  // Yýðýna metin (String) koy
+    opPOP     = $04,  // Yýðýnýn tepesindeki deðeri at
+    opDUP     = $0D,  // Yýðýnýn tepesindeki deðeri kopyala
+
+    // --- Aritmetik Ýþlemler ($05 - $08 + Yeni) ---
+    opADD     = $05,  // Toplama
+    opSUB     = $06,  // Çýkarma
+    opMUL     = $07,  // Çarpma
+    opDIV     = $08,  // Bölme
+    opMOD     = $1A,  // Kalan bulma (Modulus)
+    opPOW     = $1B,  // Üs alma (Power)
+
+    // --- Karþýlaþtýrma Ýþlemleri ($0E - $13) ---
+    opEQ      = $0E,  // Eþit mi? (==)
+    opNEQ     = $0F,  // Eþit deðil mi? (!=)
+    opGT      = $10,  // Büyük mü? (>)
+    opLT      = $11,  // Küçük mü? (<)
+    opGTE     = $12,  // Büyük veya eþit mi? (>=)
+    opLTE     = $13,  // Küçük veya eþit mi? (<=)
+
+    // --- Mantýksal Operatörler ($30 - $32) ---
+    opAND     = $30,  // Mantýksal VE
+    opOR      = $31,  // Mantýksal VEYA
+    opNOT     = $32,  // Mantýksal DEÐÝL
+
+    // --- Akýþ Kontrolü ($0A - $17, $FF) ---
+    opJMP     = $0A,  // Koþulsuz zýpla
+    opJZ      = $0B,  // Deðer 0 ise zýpla
+    opJNZ     = $0C,  // Deðer 0 deðilse zýpla
+    opCALL    = $16,  // Fonksiyon çaðýr
+    opRET     = $17,  // Fonksiyondan dön
+    opHALT    = $FF,  // Programý durdur
+
+    // --- Deðiþken ve Bellek Yönetimi ($14 - $19) ---
+    opSTORE   = $14,  // Global deðiþkene kaydet
+    opLOAD    = $15,  // Global deðiþkenden oku
+    opSTORE_L = $18,  // Yerel deðiþkene (Stack Frame) kaydet
+    opLOAD_L  = $19,  // Yerel deðiþkenden oku
+
+    // --- Dinamik Bellek (Heap) & Dizi Ýþlemleri ($20 - $24) ---
+    opALLOC   = $20,  // Yýðýndan boyut alýr, Heap'ten yer ayýrýp adres döner
+    opSSET    = $21,  // Diziye deðer yaz: [Adres, Indeks, Deðer]
+    opSGET    = $22,  // Diziden deðer oku: [Adres, Indeks]
+    opFREE    = $23,  // Bellek bloðunu DEAD olarak iþaretle
+    opLEN     = $24,  // Bloðun boyutunu (metadata) yýðýna basar
+
+    // --- String Manipülasyonu ($40 - $41) ---
+    opCONCAT  = $40,  // Ýki stringi birleþtirir
+    opSTRLEN  = $41,
+    opENTER = $30,  // Local Frame oluþtur (Parametre: kaç deðiþkenlik yer açýlsýn)
+    opLEAVE = $31,  // Local Frame'i kapat ve BP'yi geri yükle
+    opCAST_I = $32, // Float -> Int (Round)
+    opCAST_F = $33, // Int -> Float
+    opINPUT = $34,  // Kullanýcýdan veri al
+
+    // Mantýksal Bitwise (Zaten AND/OR vardý ama Bitwise olarak da eklenebilir)
+    // Mevcut opAND ve opOR'u geniþletiyoruz veya opBIT_AND gibi ekliyoruz.
+      // String uzunluðunu döner
+
+    // --- Çýktý ---
+    opPRINT   = $09   // Yýðýndaki deðeri konsola yazdýr
+  );
+
+implementation
+
+end.

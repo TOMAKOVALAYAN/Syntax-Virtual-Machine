@@ -1,0 +1,94 @@
+unit SVM.Types;
+
+interface
+
+uses
+  System.SysUtils;
+
+type
+  // Veri türleri (SVM içinde TSVMValueType olarak kullanmak daha güvenlidir)
+  TSVMValueType = (vtNone, vtInt, vtFloat, vtString, vtObject, vtAddr);
+
+  // Hücre yapýsý (Variant Record)
+  TSVMCell = record
+    case vType: TSVMValueType of
+      vtInt:    (i: Int64);
+      vtFloat:  (f: Double);
+      vtString: (s: PChar);      // Bellekteki metin adresi
+      vtObject: (obj: Pointer);  // Nesne referansý
+      vtAddr:   (addr: NativeInt);
+      function AsInt : Int64;
+  end;
+
+  // Hücreler üzerinde iþlem yapacak yardýmcý metodlar
+  TSVMCellHelper = record helper for TSVMCell
+    class function CreateInt(Value: Int64): TSVMCell; static;
+    class function CreateFloat(Value: Double): TSVMCell; static;
+    class function CreateString(const Value: string): TSVMCell; static;
+
+    // CPU tarafýnda hata veren eksik metod:
+    function AsFloat: Double;
+
+
+    function ToString: string;
+    procedure Clear; // Bellek temizliði
+  end;
+
+implementation
+
+{ TSVMCellHelper }
+
+class function TSVMCellHelper.CreateInt(Value: Int64): TSVMCell;
+begin
+  Result.vType := vtInt;
+  Result.i := Value;
+end;
+
+class function TSVMCellHelper.CreateFloat(Value: Double): TSVMCell;
+begin
+  Result.vType := vtFloat;
+  Result.f := Value;
+end;
+
+class function TSVMCellHelper.CreateString(const Value: string): TSVMCell;
+begin
+  Result.vType := vtString;
+  // Not: String yönetimi StringPool tarafýndan yapýldýðý için
+  // burada sadece PChar atamasý yapýlýr, havuzdan Intern edilmelidir.
+  Result.s := PChar(Value);
+end;
+
+function TSVMCellHelper.AsFloat: Double;
+begin
+  case vType of
+    vtFloat: Result := f;
+    vtInt:   Result := i;
+    else     Result := 0.0; // String veya None ise 0 döner (veya hata fýrlatýlabilir)
+  end;
+end;
+
+function TSVMCellHelper.ToString: string;
+begin
+  case vType of
+    vtInt:    Result := i.ToString;
+    vtFloat:  Result := FloatToStr(f, TFormatSettings.Invariant);
+    vtString: Result := StrPas(s);
+    vtAddr:   Result := '@' + IntToHex(addr, 8);
+    else      Result := 'NULL';
+  end;
+end;
+
+procedure TSVMCellHelper.Clear;
+begin
+  // Hücre sadece referans tuttuðu için gerçek silme iþlemini
+  // StringPool veya HeapManager yapar.
+  vType := vtNone;
+  i := 0;
+end;
+function TSVMCell.AsInt: Int64;
+begin
+  if vType = vtFloat then Result := Round(f)
+  else Result := i;
+end;
+
+end.

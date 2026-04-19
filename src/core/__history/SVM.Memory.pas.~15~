@@ -1,0 +1,238 @@
+unit SVM.Memory;
+
+interface
+
+uses
+  System.SysUtils,
+  SVM.Common,
+  SVM.Types;
+
+const
+  // Metadata Header Yapýsý
+  // [Adres - 2]: Bloðun Boyutu (Size)
+  // [Adres - 1]: Bloðun Durumu (Flags - 0: Dead, 1: Alive)
+  HDR_SIZE = 2;
+  FLAG_DEAD = 0;
+  FLAG_ALIVE = 1;
+
+type
+  TSVMMemory = class
+  private
+    // Veri Yýðýný (Data Stack)
+    FStack: array[0..1024] of TSVMCell;
+    FSP: Integer; // Yýðýn Ýþaretçisi (Sýradaki boþ yeri veya dolu tepesini gösterir)
+    FBP: Integer; // Base Pointer (Stack Frame baþlangýcý)
+
+    // Global Deðiþkenler (Static Memory)
+    FVariables: array[0..255] of TSVMCell;
+
+    // Çaðrý Yýðýný (Call Stack)
+    FCallStack: array[0..511] of Integer;
+    FCSP: Integer;
+
+    // --- HEAP BELLEÐÝ (Dinamik & Güvenli) ---
+    FHeap: array of TSVMCell;
+    FHeapPtr: Integer;
+
+  public
+    constructor Create;
+
+    // --- Veri Yýðýný Ýþlemleri ---
+    procedure Push(const Value: TSVMCell);
+    function Pop: TSVMCell;
+    function Peek: TSVMCell; // CPU'nun beklediði kritik metod
+    function IsEmpty: Boolean;
+    function GetAt(Index: Integer): TSVMCell;
+
+    // --- Global Deðiþken Ýþlemleri ---
+    procedure Store(const Index: Byte; const Value: TSVMCell);
+    function Load(const Index: Byte): TSVMCell;
+
+    // --- Yerel Deðiþken & Parametre Ýþlemleri ---
+    procedure StoreLocal(const Index: Integer; const Value: TSVMCell);
+    function LoadLocal(const Index: Integer): TSVMCell;
+
+    // --- Çaðrý Yýðýný Ýþlemleri ---
+    procedure CallPush(const AValue: Integer);
+    function CallPop: Integer;
+
+    // --- GÜVENLÝ HEAP & DÝZÝ ÝÞLEMLERÝ ---
+    function Allocate(const ASize: Integer): Integer;
+    procedure HeapStore(const AAddr: Integer; const AValue: TSVMCell);
+    function HeapLoad(const AAddr: Integer): TSVMCell;
+    procedure Deallocate(const AAddr: Integer);
+    function GetBlockSize(const AAddr: Integer): Integer;
+
+    // Özellikler
+    property SP: Integer read FSP write FSP;
+    property BP: Integer read FBP write FBP;
+    property CSP: Integer read FCSP;
+    property HeapPtr: Integer read FHeapPtr;
+  end;
+
+implementation
+
+constructor TSVMMemory.Create;
+var
+  I: Integer;
+begin
+  inherited Create;
+  FSP := 0;   // 0: Boþ yýðýn baþlangýcý
+  FBP := 0;
+  FCSP := -1;
+  FHeapPtr := HDR_SIZE;
+
+  SetLength(FHeap, 1024);
+
+  // Hücreleri temizle (Varsayýlan Integer 0)
+  for I := 0 to High(FVariables) do FVariables[I] := TSVMCell.CreateInt(0);
+  for I := 0 to High(FStack) do FStack[I] := TSVMCell.CreateInt(0);
+  for I := 0 to High(FHeap) do FHeap[I] := TSVMCell.CreateInt(0);
+end;
+
+{ --- Veri Yýðýný --- }
+
+procedure TSVMMemory.Push(const Value: TSVMCell);
+begin
+  if FSP >= High(FStack) then
+    raise Exception.Create('SVM Error: Stack Overflow');
+  FStack[FSP] := Value;
+  Inc(FSP);
+end;
+
+function TSVMMemory.Pop: TSVMCell;
+begin
+  if FSP <= 0 then
+    raise Exception.Create('SVM Error: Stack Underflow');
+  Dec(FSP);
+  Result := FStack[FSP];
+  // Bellek temizliði (Opsiyonel, debug kolaylýðý saðlar)
+  FStack[FSP] := TSVMCell.CreateInt(0);
+end;
+
+function TSVMMemory.Peek: TSVMCell;
+begin
+  if FSP <= 0 then
+    raise Exception.Create('SVM Error: Stack Underflow (Peek)');
+  Result := FStack[FSP - 1];
+end;
+
+function TSVMMemory.IsEmpty: Boolean;
+begin
+  Result := FSP = 0;
+end;
+
+function TSVMMemory.GetAt(Index: Integer): TSVMCell;
+begin
+  if (Index < 0) or (Index >= FSP) then
+    raise Exception.CreateFmt('SVM Error: Geçersiz yýðýn eriþimi (Index: %d)', [Index]);
+  Result := FStack[Index];
+end;
+
+{ --- Global Deðiþkenler --- }
+
+procedure TSVMMemory.Store(const Index: Byte; const Value: TSVMCell);
+begin
+  FVariables[Index] := Value;
+end;
+
+function TSVMMemory.Load(const Index: Byte): TSVMCell;
+begin
+  Result := FVariables[Index];
+end;
+
+{ --- Yerel Deðiþkenler (Stack Frame) --- }
+
+procedure TSVMMemory.StoreLocal(const Index: Integer; const Value: TSVMCell);
+var
+  TargetIdx: Integer;
+begin
+  // BP'de eski BP saklýdýr, BP + 1'den itibaren yerel deðiþkenler baþlar
+  TargetIdx := FBP + 1 + Index;
+
+  if (TargetIdx < 0) or (TargetIdx >= FSP) then
+    raise Exception.CreateFmt('SVM Error: Yerel bellek sýnýr ihlali (StoreLocal). Index: %d, SP: %d', [TargetIdx, FSP]);
+
+  FStack[TargetIdx] := Value;
+end;
+
+function TSVMMemory.LoadLocal(const Index: Integer): TSVMCell;
+var
+  TargetIdx: Integer;
+begin
+  TargetIdx := FBP + 1 + Index;
+
+  if (TargetIdx < 0) or (TargetIdx >= FSP) then
+    raise Exception.CreateFmt('SVM Error: Yerel bellek sýnýr ihlali (LoadLocal). Index: %d, SP: %d', [TargetIdx, FSP]);
+
+  Result := FStack[TargetIdx];
+end;
+
+{ --- Çaðrý Yýðýný --- }
+
+procedure TSVMMemory.CallPush(const AValue: Integer);
+begin
+  if FCSP >= High(FCallStack) then
+    raise Exception.Create('SVM Error: Call Stack Overflow');
+  Inc(FCSP);
+  FCallStack[FCSP] := AValue;
+end;
+
+function TSVMMemory.CallPop: Integer;
+begin
+  if FCSP < 0 then
+    raise Exception.Create('SVM Error: Call Stack Underflow');
+  Result := FCallStack[FCSP];
+  Dec(FCSP);
+end;
+
+{ --- GÜVENLÝ HEAP & DÝZÝ ÝÞLEMLERÝ --- }
+
+function TSVMMemory.Allocate(const ASize: Integer): Integer;
+begin
+  if ASize <= 0 then
+    raise Exception.Create('SVM Error: Geçersiz bellek ayýrma boyutu.');
+
+  Result := FHeapPtr + HDR_SIZE;
+
+  // Dinamik geniþleme
+  if (Result + ASize) >= Length(FHeap) then
+    SetLength(FHeap, Length(FHeap) + 1024 + ASize);
+
+  FHeap[Result - 2] := TSVMCell.CreateInt(ASize);
+  FHeap[Result - 1] := TSVMCell.CreateInt(FLAG_ALIVE);
+
+  FHeapPtr := Result + ASize;
+end;
+
+procedure TSVMMemory.HeapStore(const AAddr: Integer; const AValue: TSVMCell);
+begin
+  if (AAddr < HDR_SIZE) or (AAddr >= Length(FHeap)) then
+    raise Exception.CreateFmt('SVM Error: Heap Write Sýnýr Ýhlali! Adres: %d', [AAddr]);
+
+  FHeap[AAddr] := AValue;
+end;
+
+function TSVMMemory.HeapLoad(const AAddr: Integer): TSVMCell;
+begin
+  if (AAddr < HDR_SIZE) or (AAddr >= Length(FHeap)) then
+    raise Exception.CreateFmt('SVM Error: Heap Read Sýnýr Ýhlali! Adres: %d', [AAddr]);
+
+  Result := FHeap[AAddr];
+end;
+
+function TSVMMemory.GetBlockSize(const AAddr: Integer): Integer;
+begin
+  if (AAddr < HDR_SIZE) then Exit(0);
+  Result := FHeap[AAddr - 2].i;
+end;
+
+procedure TSVMMemory.Deallocate(const AAddr: Integer);
+begin
+  if (AAddr < HDR_SIZE) or (AAddr >= Length(FHeap)) then
+    raise Exception.Create('SVM Error: Geçersiz adres serbest býrakýlamaz.');
+
+  FHeap[AAddr - 1] := TSVMCell.CreateInt(FLAG_DEAD);
+end;
+
+end.

@@ -1,0 +1,138 @@
+unit SVM.Core;
+
+interface
+
+uses
+  System.SysUtils, System.Classes, System.TypInfo, SVM.Common,SVM.Types;
+
+type
+  TSVM = class
+  private
+    // Stack: Hücrelerin dizisi
+    FStack: array[0..1024] of TSVMCell;
+    FSP: Integer; // Stack Pointer (Yýðýn imleci)
+
+    // Bytecode ve Program Counter
+    FCode: array of Byte;
+    FPC: Integer;
+
+    // Motorun durumu
+    FIsRunning: Boolean;
+  public
+    constructor Create;
+
+    // Temel Stack Ýþlemleri
+    procedure Push(const Value: TSVMCell);
+    function Pop: TSVMCell;
+
+    // Dosya Yükleme (aminoglu imza kontrollü)
+    procedure LoadFromSyasm(const FileName: string);
+
+    // Motoru Çalýþtýrma (Fetch-Decode-Execute)
+    procedure Run;
+
+    // Debug Yardýmý
+    procedure DumpStack;
+
+    property PC: Integer read FPC;
+    property SP: Integer read FSP;
+  end;
+
+implementation
+
+constructor TSVM.Create;
+begin
+  inherited Create;
+  FSP := -1;     // Stack boþ (0. index dolu demektir)
+  FPC := 0;      // Kodun baþý
+  FIsRunning := False;
+end;
+
+procedure TSVM.Push(const Value: TSVMCell);
+begin
+  if FSP >= High(FStack) then
+    raise Exception.Create('SVM Error: Stack Overflow!');
+
+  Inc(FSP);
+  FStack[FSP] := Value;
+end;
+
+function TSVM.Pop: TSVMCell;
+begin
+  if FSP < 0 then
+    raise Exception.Create('SVM Error: Stack Underflow!');
+
+  Result := FStack[FSP];
+  Dec(FSP);
+end;
+
+procedure TSVM.LoadFromSyasm(const FileName: string);
+var
+  FS: TFileStream;
+  Magic: array[0..7] of Byte;
+  VerMajor, VerMinor: Byte;
+  CodeSize: Integer;
+begin
+  if not FileExists(FileName) then
+    raise Exception.Create('SVM Error: .syasm dosyasý bulunamadý: ' + FileName);
+
+  FS := TFileStream.Create(FileName, fmOpenRead);
+  try
+    // 1. Ýmza Kontrolü (97 109 105 110 111 103 108 117)
+    FS.ReadBuffer(Magic, 8);
+    if not CompareMem(@Magic, @SVM_MAGIC, 8) then
+      raise Exception.Create('SVM Error: Geçersiz dosya imzasý! (aminoglu bulunamadý)');
+
+    // 2. Versiyon Kontrolü
+    FS.ReadBuffer(VerMajor, 1);
+    FS.ReadBuffer(VerMinor, 1);
+
+    // 3. Bytecode Yükleme
+    CodeSize := FS.Size - FS.Position;
+    if CodeSize <= 0 then
+      raise Exception.Create('SVM Error: Dosya içerisinde komut bulunamadý.');
+
+    SetLength(FCode, CodeSize);
+    FS.ReadBuffer(FCode[0], CodeSize);
+
+    Writeln(Format('SVM: %d byte kod yüklendi. (v%d.%d)', [CodeSize, VerMajor, VerMinor]));
+    FPC := 0;
+  finally
+    FS.Free;
+  end;
+end;
+
+procedure TSVM.Run;
+begin
+  if Length(FCode) = 0 then
+    raise Exception.Create('SVM Error: Çalýþtýrýlacak kod yok!');
+
+  FIsRunning := True;
+  Writeln('SVM: Motor baþlatýldý...');
+
+  // Adým 3'te buraya Fetch-Decode-Execute döngüsü gelecek
+  while FIsRunning and (FPC < Length(FCode)) do
+  begin
+     // Þimdilik sadece durduruyoruz ki sonsuz döngü olmasýn
+     FIsRunning := False;
+  end;
+
+  Writeln('SVM: Program sonlandý.');
+end;
+
+procedure TSVM.DumpStack;
+var
+  i: Integer;
+begin
+  Writeln('--- STACK DUMP ---');
+  if FSP = -1 then
+    Writeln('(Empty)')
+  else
+  begin
+    for i := FSP downto 0 do
+      Writeln(Format('[%d]: Type=%s', [i, GetEnumName(TypeInfo(TValueType), Ord(FStack[i].vType))]));
+  end;
+  Writeln('------------------');
+end;
+
+end.

@@ -1,0 +1,147 @@
+unit SVM.Common;
+
+interface
+
+uses
+  System.SysUtils;
+
+const
+  // SVM Dosya Ýmzasý (Magic Number)
+  // Byte deðerleri: 'a', 'm', 'i', 'n', 'o', 'g', 'l', 'u'
+  SVM_MAGIC: array[0..7] of Byte = (97, 109, 105, 110, 111, 103, 108, 117);
+
+  // Versiyon Bilgisi
+  SVM_VER_MAJOR = 1;
+  SVM_VER_MINOR = 0;
+
+type
+  { SVM Ýþlem Kodlarý (Opcodes) }
+  TSVMOpcode = (
+    // --- Temel ve Yýðýn Ýþlemleri ($00 - $0D) ---
+    opNOP     = $00,  // Ýþlem yapma
+    opPUSH_I  = $01,  // Yýðýna tam sayý (Int64) koy
+    opPUSH_F  = $02,  // Yýðýna ondalýklý sayý (Double) koy
+    opPUSH_S  = $03,  // Yýðýna metin (String) koy
+    opPOP     = $04,  // Yýðýnýn tepesindeki deðeri at
+    opPRINT   = $09,  // Yýðýndaki deðeri konsola yazdýr
+    opDUP     = $0D,  // Yýðýnýn tepesindeki deðeri kopyala
+
+    // --- Aritmetik Ýþlemler ($05 - $08, $1A - $1B) ---
+    opADD     = $05,  // Toplama
+    opSUB     = $06,  // Çýkarma
+    opMUL     = $07,  // Çarpma
+    opDIV     = $08,  // Bölme
+    opMOD     = $1A,  // Kalan bulma (Modulus)
+    opPOW     = $1B,  // Üs alma (Power)
+
+    // --- Karþýlaþtýrma Ýþlemleri ($0E - $13) ---
+    opEQ      = $0E,  // Eþit mi? (==)
+    opNEQ     = $0F,  // Eþit deðil mi? (!=)
+    opGT      = $10,  // Büyük mü? (>)
+    opLT      = $11,  // Küçük mü? (<)
+    opGTE     = $12,  // Büyük veya eþit mi? (>=)
+    opLTE     = $13,  // Küçük veya eþit mi? (<=)
+
+    // --- Akýþ Kontrolü ($0A - $17, $FF) ---
+    opJMP     = $0A,  // Koþulsuz zýpla
+    opJZ      = $0B,  // Deðer 0 ise zýpla
+    opJNZ     = $0C,  // Deðer 0 deðilse zýpla
+    opCALL    = $16,  // Fonksiyon çaðýr
+    opRET     = $17,  // Fonksiyondan dön
+    opHALT    = $FF,  // Programý durdur
+
+    // --- Bellek Yönetimi (Global & Yerel) ($14 - $51) ---
+    opSTORE   = $14,  // Global deðiþkene kaydet
+    opLOAD    = $15,  // Global deðiþkenden oku
+    opSTORE_L = $18,  // Yerel deðiþkene (Stack Frame) kaydet
+    opLOAD_L  = $19,  // Yerel deðiþkenden oku
+    opENTER   = $50,  // Local Frame oluþtur
+    opLEAVE   = $51,  // Local Frame'i kapat
+
+    // --- Mantýksal Operatörler ($30 - $32) ---
+    opAND     = $30,  // Mantýksal VE
+    opOR      = $31,  // Mantýksal VEYA
+    opNOT     = $32,  // Mantýksal DEÐÝL
+
+    // --- Tip Dönüþümü ve Giriþ ($52 - $54) ---
+    opCAST_I  = $52,  // Float -> Int
+    opCAST_F  = $53,  // Int -> Float
+    opINPUT   = $54,  // Kullanýcýdan veri al
+
+    // --- Dinamik Bellek (Heap) & Dizi Ýþlemleri ($20 - $24) ---
+    opALLOC   = $20,  // Heap'ten yer ayýr
+    opSSET    = $21,  // Heap'e deðer yaz
+    opSGET    = $22,  // Heap'ten deðer oku
+    opFREE    = $23,  // Belleði serbest býrak
+    opLEN     = $24,  // Bloðun boyutunu al
+
+    // --- String Manipülasyonu ($40 - $41) ---
+    opCONCAT  = $40,  // String birleþtir
+    opSTRLEN  = $41,  // String uzunluðu
+
+    // --- Native Bridge (DLL) Ýþlemleri ($60 - $62) ---
+    opDLL_LOAD = $60, // DLL dosyasýný belleðe yükle
+    opDLL_CALL = $61, // DLL içindeki fonksiyonu çaðýr
+    opDLL_FREE = $62  // DLL'i bellekten boþalt
+  );
+
+// Debug ve hata mesajlarý için yardýmcý fonksiyon
+function OpcodeToString(Op: TSVMOpcode): string;
+
+implementation
+
+function OpcodeToString(Op: TSVMOpcode): string;
+begin
+  case Op of
+    opNOP:     Result := 'NOP';
+    opPUSH_I:  Result := 'PUSH_I';
+    opPUSH_F:  Result := 'PUSH_F';
+    opPUSH_S:  Result := 'PUSH_S';
+    opPOP:     Result := 'POP';
+    opPRINT:   Result := 'PRINT';
+    opDUP:     Result := 'DUP';
+    opADD:     Result := 'ADD';
+    opSUB:     Result := 'SUB';
+    opMUL:     Result := 'MUL';
+    opDIV:     Result := 'DIV';
+    opMOD:     Result := 'MOD';
+    opPOW:     Result := 'POW';
+    opEQ:      Result := 'EQ';
+    opNEQ:     Result := 'NEQ';
+    opGT:      Result := 'GT';
+    opLT:      Result := 'LT';
+    opGTE:     Result := 'GTE';
+    opLTE:     Result := 'LTE';
+    opJMP:     Result := 'JMP';
+    opJZ:      Result := 'JZ';
+    opJNZ:     Result := 'JNZ';
+    opCALL:    Result := 'CALL';
+    opRET:     Result := 'RET';
+    opHALT:    Result := 'HALT';
+    opSTORE:   Result := 'STORE';
+    opLOAD:    Result := 'LOAD';
+    opSTORE_L: Result := 'STORE_L';
+    opLOAD_L:  Result := 'LOAD_L';
+    opENTER:   Result := 'ENTER';
+    opLEAVE:   Result := 'LEAVE';
+    opAND:     Result := 'AND';
+    opOR:      Result := 'OR';
+    opNOT:     Result := 'NOT';
+    opCAST_I:  Result := 'CAST_I';
+    opCAST_F:  Result := 'CAST_F';
+    opINPUT:   Result := 'INPUT';
+    opALLOC:   Result := 'ALLOC';
+    opSSET:    Result := 'SSET';
+    opSGET:    Result := 'SGET';
+    opFREE:    Result := 'FREE';
+    opLEN:     Result := 'LEN';
+    opCONCAT:  Result := 'CONCAT';
+    opSTRLEN:  Result := 'STRLEN';
+    opDLL_LOAD: Result := 'DLL_LOAD';
+    opDLL_CALL: Result := 'DLL_CALL';
+    opDLL_FREE: Result := 'DLL_FREE';
+    else       Result := 'UNKNOWN_OP ($' + IntToHex(Byte(Op), 2) + ')';
+  end;
+end;
+
+end.

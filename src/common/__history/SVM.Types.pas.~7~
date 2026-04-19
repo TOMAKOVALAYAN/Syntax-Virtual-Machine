@@ -1,0 +1,117 @@
+unit SVM.Types;
+
+interface
+
+uses
+  System.SysUtils;
+
+type
+  // Veri türleri
+  TSVMValueType = (vtNone, vtInt, vtFloat, vtString, vtObject, vtAddr);
+
+  // Hücre yapýsý (Variant Record - Bellek Dostu Union Yapýsý)
+  TSVMCell = record
+    case vType: TSVMValueType of
+      vtInt:    (i: Int64);
+      vtFloat:  (f: Double);
+      vtString: (s: PChar);      // StringPool'dan gelen metin adresi
+      vtObject: (obj: Pointer);  // Nesne referansý
+      vtAddr:   (addr: NativeInt);
+  end;
+
+  // Hücreler üzerinde iþlem yapacak yardýmcý metodlar
+  TSVMCellHelper = record helper for TSVMCell
+    class function CreateInt(Value: Int64): TSVMCell; static;
+    class function CreateFloat(Value: Double): TSVMCell; static;
+    class function CreateString(const Value: string): TSVMCell; static;
+
+    // Ýþlemci ve Native Bridge için gerekli dönüþüm metodlarý
+    function AsFloat: Double;
+    function AsInt: Int64;
+    function AsString: string; // SVM.Native'in beklediði metod
+
+    function ToString: string;
+    procedure Clear; // Bellek temizliði
+  end;
+
+implementation
+
+{ TSVMCellHelper }
+
+class function TSVMCellHelper.CreateInt(Value: Int64): TSVMCell;
+begin
+  FillChar(Result, SizeOf(TSVMCell), 0); // Belleði temizle
+  Result.vType := vtInt;
+  Result.i := Value;
+end;
+
+class function TSVMCellHelper.CreateFloat(Value: Double): TSVMCell;
+begin
+  FillChar(Result, SizeOf(TSVMCell), 0);
+  Result.vType := vtFloat;
+  Result.f := Value;
+end;
+
+class function TSVMCellHelper.CreateString(const Value: string): TSVMCell;
+begin
+  FillChar(Result, SizeOf(TSVMCell), 0);
+  Result.vType := vtString;
+  {
+    ÖNEMLÝ: StringPool kullanýldýðý için metinlerin yaþam ömrü
+    havuz tarafýndan yönetilir. PChar atamasý güvenlidir.
+  }
+  Result.s := PChar(Value);
+end;
+
+function TSVMCellHelper.AsFloat: Double;
+begin
+  case vType of
+    vtFloat: Result := f;
+    vtInt:   Result := i * 1.0;
+    vtString:
+      begin
+        if not TryStrToFloat(StrPas(s), Result, TFormatSettings.Invariant) then
+          Result := 0.0;
+      end;
+    else Result := 0.0;
+  end;
+end;
+
+function TSVMCellHelper.AsInt: Int64;
+begin
+  case vType of
+    vtInt:   Result := i;
+    vtFloat: Result := Round(f);
+    vtString: Result := StrToInt64Def(StrPas(s), 0);
+    else Result := 0;
+  end;
+end;
+
+function TSVMCellHelper.AsString: string;
+begin
+  // Native bridge ve CPU yazdýrma iþlemleri için
+  if vType = vtString then
+    Result := StrPas(s)
+  else
+    Result := ToString;
+end;
+
+function TSVMCellHelper.ToString: string;
+begin
+  case vType of
+    vtInt:    Result := i.ToString;
+    vtFloat:  Result := FloatToStr(f, TFormatSettings.Invariant);
+    vtString: Result := StrPas(s);
+    vtAddr:   Result := '@' + IntToHex(addr, 8);
+    vtObject: Result := '[Object:' + IntToHex(NativeInt(obj), 8) + ']';
+    else      Result := 'NULL';
+  end;
+end;
+
+procedure TSVMCellHelper.Clear;
+begin
+  vType := vtNone;
+  i := 0;
+end;
+
+end.

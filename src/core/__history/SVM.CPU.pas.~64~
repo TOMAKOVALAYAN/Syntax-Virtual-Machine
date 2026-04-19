@@ -1,0 +1,300 @@
+unit SVM.CPU;
+
+interface
+
+uses
+  System.SysUtils, System.Math, Winapi.Windows,
+  SVM.Common, SVM.Memory, SVM.Types, SVM.Strings;
+
+type
+  TSVMCPU = class
+  private
+    FMemory: TSVMMemory;
+    FStrings: TSVMStringPool;
+    FCode: array of Byte;
+    FPC: Integer;
+    FRunning: Boolean;
+    FDebugMode: Boolean;
+
+    function ReadByte: Byte;
+    function ReadInt64: Int64;
+    function ReadDouble: Double;
+    function ReadString: string;
+
+    procedure SetColor(Color: Word);
+    procedure DumpStep(Op: TSVMOpcode);
+  public
+    constructor Create(AMemory: TSVMMemory);
+    destructor Destroy; override;
+    procedure LoadCode(const ACode: array of Byte);
+    procedure Run;
+    procedure Step;
+
+    property Strings: TSVMStringPool read FStrings;
+    property PC: Integer read FPC;
+    property Running: Boolean read FRunning;
+    property DebugMode: Boolean read FDebugMode write FDebugMode;
+  end;
+
+implementation
+
+constructor TSVMCPU.Create(AMemory: TSVMMemory);
+begin
+  inherited Create;
+  FMemory := AMemory;
+  FStrings := TSVMStringPool.Create;
+  FPC := 0;
+  FRunning := False;
+  FDebugMode := False;
+end;
+
+destructor TSVMCPU.Destroy;
+begin
+  FStrings.Free;
+  inherited;
+end;
+
+procedure TSVMCPU.SetColor(Color: Word);
+begin
+  SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), Color);
+end;
+
+procedure TSVMCPU.DumpStep(Op: TSVMOpcode);
+begin
+  if not FDebugMode then Exit;
+  SetColor(FOREGROUND_GREEN or FOREGROUND_INTENSITY);
+  Write(Format('[DEBUG] PC:%.4d | OP: %-8s ', [FPC - 1, OpcodeToString(Op)]));
+  SetColor(FOREGROUND_RED or FOREGROUND_GREEN or FOREGROUND_BLUE);
+  Write(Format('| SP: %d | BP: %d', [FMemory.SP, FMemory.BP]));
+  if FMemory.SP > 0 then
+    Write(' | Top: ', FMemory.Peek.ToString)
+  else
+    Write(' | Top: EMPTY');
+  Writeln;
+  SetColor(7);
+end;
+
+procedure TSVMCPU.LoadCode(const ACode: array of Byte);
+begin
+  FPC := 0;
+  if Length(ACode) > 0 then
+  begin
+    SetLength(FCode, Length(ACode));
+    Move(ACode[0], FCode[0], Length(ACode));
+  end;
+end;
+
+function TSVMCPU.ReadByte: Byte;
+begin
+  if FPC >= Length(FCode) then
+    raise Exception.Create('SVM Error: Unexpected EOF (Code Segment Boundary)');
+  Result := FCode[FPC];
+  Inc(FPC);
+end;
+
+function TSVMCPU.ReadInt64: Int64;
+begin
+  if FPC + 8 > Length(FCode) then
+    raise Exception.Create('SVM Error: Unexpected EOF reading Int64');
+  Move(FCode[FPC], Result, 8);
+  Inc(FPC, 8);
+end;
+
+function TSVMCPU.ReadDouble: Double;
+begin
+  if FPC + 8 > Length(FCode) then
+    raise Exception.Create('SVM Error: Unexpected EOF reading Double');
+  Move(FCode[FPC], Result, 8);
+  Inc(FPC, 8);
+end;
+
+function TSVMCPU.ReadString: string;
+var
+  L: Integer;
+  U: RawByteString;
+begin
+  if FPC + 4 > Length(FCode) then
+    raise Exception.Create('SVM Error: Unexpected EOF reading String Length');
+  Move(FCode[FPC], L, 4);
+  Inc(FPC, 4);
+  if L > 0 then
+  begin
+    if FPC + L > Length(FCode) then
+      raise Exception.Create('SVM Error: Unexpected EOF reading String Data');
+    SetLength(U, L);
+    Move(FCode[FPC], U[1], L);
+    Result := TEncoding.UTF8.GetString(U);
+    Inc(FPC, L);
+  end else Result := '';
+end;
+
+procedure TSVMCPU.Step;
+var
+  B: Byte;
+  Op: TSVMOpcode;
+  V1, V2: TSVMCell;
+  Addr: Int64;
+  I, LCount: Integer;
+  S: string;
+  D: Double;
+begin
+  if not FRunning then Exit;
+
+  // --- ÝSTEDÝÐÝN DEBUG SATIRI ---
+  // Henüz ReadByte ile PC artmadan önce mevcut durumu yazdýrýyoruz
+  if FPC < Length(FCode) then
+  begin
+    B := FCode[FPC];
+    Writeln(Format('>> DEBUG: PC=%d, Byte=$%.2x, OpcodeName=%s', [FPC, B, OpcodeToString(TSVMOpcode(B))]));
+  end;
+  // ------------------------------
+
+  B := ReadByte;
+  Op := TSVMOpcode(B);
+
+  if FDebugMode then DumpStep(Op);
+
+  case Op of
+    opNOP: ;
+
+    { --- STACK --- }
+    opPUSH_I: FMemory.Push(TSVMCell.CreateInt(ReadInt64));
+    opPUSH_F: FMemory.Push(TSVMCell.CreateFloat(ReadDouble));
+    opPUSH_S: FMemory.Push(TSVMCell.CreateString(FStrings.Intern(ReadString)));
+    opPOP:    FMemory.Pop;
+    opDUP:    FMemory.Push(FMemory.Peek);
+
+    { --- VARIABLES --- }
+    opSTORE:   FMemory.Store(ReadByte, FMemory.Pop);
+    opLOAD:    FMemory.Push(FMemory.Load(ReadByte));
+    opSTORE_L: FMemory.StoreLocal(ShortInt(ReadByte), FMemory.Pop);
+    opLOAD_L:  FMemory.Push(FMemory.LoadLocal(ShortInt(ReadByte)));
+
+    { --- CALL FRAME --- }
+    opENTER:
+    begin
+      LCount := ReadByte;
+      FMemory.CallPush(FMemory.BP);
+      FMemory.BP := FMemory.SP;
+      for I := 1 to LCount do
+        FMemory.Push(TSVMCell.CreateInt(0));
+    end;
+
+    opLEAVE:
+    begin
+      while FMemory.SP > FMemory.BP do
+        FMemory.Pop;
+      FMemory.BP := FMemory.CallPop;
+    end;
+
+    { --- MATH --- }
+    opADD:
+    begin
+      V2 := FMemory.Pop; V1 := FMemory.Pop;
+      if (V1.vType = vtString) or (V2.vType = vtString) then
+        FMemory.Push(TSVMCell.CreateString(FStrings.Intern(V1.ToString + V2.ToString)))
+      else
+        FMemory.Push(TSVMCell.CreateFloat(V1.AsFloat + V2.AsFloat));
+    end;
+    opSUB: begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateFloat(V1.AsFloat - V2.AsFloat)); end;
+    opMUL: begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateFloat(V1.AsFloat * V2.AsFloat)); end;
+    opDIV:
+    begin
+      V2 := FMemory.Pop; V1 := FMemory.Pop;
+      if Abs(V2.AsFloat) > 1E-9 then
+        FMemory.Push(TSVMCell.CreateFloat(V1.AsFloat / V2.AsFloat))
+      else
+        raise Exception.Create('SVM Error: Division by zero');
+    end;
+    opMOD: begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(V1.AsInt mod V2.AsInt)); end;
+    opPOW: begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateFloat(Power(V1.AsFloat, V2.AsFloat))); end;
+
+    { --- LOGIC --- }
+    opEQ:  begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord(Abs(V1.AsFloat - V2.AsFloat) < 1E-9))); end;
+    opNEQ: begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord(Abs(V1.AsFloat - V2.AsFloat) > 1E-9))); end;
+    opGT:  begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord(V1.AsFloat > V2.AsFloat))); end;
+    opLT:  begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord(V1.AsFloat < V2.AsFloat))); end;
+    opGTE: begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord(V1.AsFloat >= V2.AsFloat))); end;
+    opLTE: begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord(V1.AsFloat <= V2.AsFloat))); end;
+    opAND: begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord((V1.AsFloat <> 0) and (V2.AsFloat <> 0)))); end;
+    opOR:  begin V2 := FMemory.Pop; V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord((V1.AsFloat <> 0) or (V2.AsFloat <> 0)))); end;
+    opNOT: begin V1 := FMemory.Pop; FMemory.Push(TSVMCell.CreateInt(Ord(V1.AsFloat = 0))); end;
+
+    { --- CONTROL FLOW --- }
+    opJMP:  FPC := ReadInt64;
+    opJZ:   begin V1 := FMemory.Pop; Addr := ReadInt64; if V1.AsFloat = 0 then FPC := Addr; end;
+    opJNZ:  begin V1 := FMemory.Pop; Addr := ReadInt64; if V1.AsFloat <> 0 then FPC := Addr; end;
+    opCALL: begin Addr := ReadInt64; FMemory.CallPush(FPC); FPC := Addr; end;
+    opRET:  FPC := FMemory.CallPop;
+
+    { --- SYSTEM & CAST --- }
+    opCAST_I: FMemory.Push(TSVMCell.CreateInt(Trunc(FMemory.Pop.AsFloat)));
+    opCAST_F: FMemory.Push(TSVMCell.CreateFloat(FMemory.Pop.AsFloat));
+
+    opPRINT: Writeln('SVM Console: ', FMemory.Pop.ToString);
+    opINPUT:
+    begin
+      Write('SVM INPUT > ');
+      Readln(S);
+      S := S.Trim;
+      if TryStrToFloat(S.Replace('.', FormatSettings.DecimalSeparator).Replace(',', FormatSettings.DecimalSeparator), D) then
+        FMemory.Push(TSVMCell.CreateFloat(D))
+      else
+        FMemory.Push(TSVMCell.CreateString(FStrings.Intern(S)));
+    end;
+    opHALT:
+    begin
+      FRunning := False;
+      SetColor(FOREGROUND_RED or FOREGROUND_INTENSITY);
+      Writeln('>>> HALT <<<');
+      SetColor(7);
+    end;
+
+    { --- HEAP --- }
+    opALLOC: FMemory.Push(TSVMCell.CreateInt(FMemory.Allocate(FMemory.Pop.AsInt)));
+    opFREE:  FMemory.Deallocate(FMemory.Pop.AsInt);
+    opSSET:
+    begin
+      V2 := FMemory.Pop; I := FMemory.Pop.AsInt; Addr := FMemory.Pop.AsInt;
+      FMemory.HeapStore(Addr + I, V2);
+    end;
+    opSGET:
+    begin
+      I := FMemory.Pop.AsInt; Addr := FMemory.Pop.AsInt;
+      FMemory.Push(FMemory.HeapLoad(Addr + I));
+    end;
+    opLEN: FMemory.Push(TSVMCell.CreateInt(FMemory.GetBlockSize(FMemory.Pop.AsInt)));
+
+    { --- STRING OP --- }
+    opCONCAT:
+    begin
+      V2 := FMemory.Pop; V1 := FMemory.Pop;
+      FMemory.Push(TSVMCell.CreateString(FStrings.Intern(V1.ToString + V2.ToString)));
+    end;
+    opSTRLEN: FMemory.Push(TSVMCell.CreateInt(Length(FMemory.Pop.ToString)));
+
+  else
+    raise Exception.Create(Format('SVM Error: Unknown Opcode $%.2x at PC: %d', [B, FPC-1]));
+  end;
+end;
+
+procedure TSVMCPU.Run;
+begin
+  if Length(FCode) = 0 then Exit;
+  FRunning := True;
+  try
+    while FRunning and (FPC < Length(FCode)) do
+      Step;
+  except
+    on E: Exception do
+    begin
+      FRunning := False;
+      SetColor(FOREGROUND_RED or FOREGROUND_INTENSITY);
+      Writeln(sLineBreak + 'SVM Execution Error at PC: ' + (FPC - 1).ToString);
+      Writeln('Reason: ' + E.Message);
+      SetColor(7);
+    end;
+  end;
+end;
+
+end.

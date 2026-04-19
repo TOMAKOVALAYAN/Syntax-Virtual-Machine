@@ -1,0 +1,96 @@
+unit SVM.Strings;
+
+interface
+
+uses
+  System.SysUtils, System.Classes, System.Generics.Collections;
+
+type
+  TSVMStringPool = class
+  private
+    { PChar adreslerini yönetmek için jenerik liste }
+    FStrings: TList<PChar>;
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    { Yeni bir string oluþturur, havuza ekler ve adresini (PChar) döner }
+    function Intern(const Value: string): PChar;
+
+    { Ýki PChar'ý güvenli bir þekilde birleþtirir ve yeni sonucu havuza alýr }
+    function Combine(S1, S2: PChar): PChar;
+
+    { Tüm string belleklerini serbest býrakýr }
+    procedure Clear;
+  end;
+
+implementation
+
+constructor TSVMStringPool.Create;
+begin
+  inherited Create;
+  FStrings := TList<PChar>.Create;
+end;
+
+destructor TSVMStringPool.Destroy;
+begin
+  Clear;
+  FStrings.Free;
+  inherited;
+end;
+
+function TSVMStringPool.Intern(const Value: string): PChar;
+var
+  P: PChar;
+  Len: Integer;
+begin
+  if Value = '' then Exit(nil);
+
+  {
+    Bellek kaymalarýný önlemek için manuel yönetim:
+    String uzunluðu + 1 (Null Terminator #0 için)
+  }
+  Len := (Length(Value) + 1) * SizeOf(Char);
+
+  { Bellekten yer ayýr }
+  GetMem(P, Len);
+
+  {
+    KRÝTÝK: Belleði tamamen sýfýrla.
+    "i baþladý" gibi önceki verilerin kalýntýlarýný bu temizler.
+  }
+  FillChar(P^, Len, 0);
+
+  { String içeriðini ayrýlan belleðe kopyala }
+  if Length(Value) > 0 then
+    Move(Pointer(Value)^, P^, Length(Value) * SizeOf(Char));
+
+  FStrings.Add(P);
+  Result := P;
+end;
+
+function TSVMStringPool.Combine(S1, S2: PChar): PChar;
+var
+  CombinedStr: string;
+begin
+  { PChar'larý güvenli bir þekilde Delphi stringine çevirip birleþtir }
+  CombinedStr := StrPas(S1) + StrPas(S2);
+
+  { Yeni oluþan string'i tekrar Intern ederek havuza dahil et }
+  Result := Intern(CombinedStr);
+end;
+
+procedure TSVMStringPool.Clear;
+var
+  P: PChar;
+begin
+  { Listedeki tüm PChar'lar için GetMem ile ayrýlan belleði FreeMem ile boþalt }
+  for P in FStrings do
+  begin
+    if P <> nil then
+      FreeMem(P);
+  end;
+  FStrings.Clear;
+end;
+
+end.

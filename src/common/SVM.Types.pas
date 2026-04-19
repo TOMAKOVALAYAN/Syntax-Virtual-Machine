@@ -1,0 +1,124 @@
+unit SVM.Types;
+
+interface
+
+uses
+  System.SysUtils;
+
+type
+  { Data Types: Core types supported by the SVM }
+  TSVMValueType = (vtNone, vtInt, vtFloat, vtString, vtObject, vtAddr);
+
+  {
+    Cell Structure (Variant Record):
+    Occupies only as much space as the largest data type (Union).
+    This structure is chosen for performance and low memory footprint.
+  }
+  TSVMCell = record
+    case vType: TSVMValueType of
+      vtInt:    (i: Int64);
+      vtFloat:  (f: Double);
+      vtString: (s: PChar);      // Address of text managed by StringPool
+      vtObject: (obj: Pointer);  // Reference to an Object or DLL Handle
+      vtAddr:   (addr: NativeInt);
+  end;
+
+  { TSVMCellHelper: Adds object-oriented capabilities to the cell structure }
+  TSVMCellHelper = record helper for TSVMCell
+    class function CreateInt(Value: Int64): TSVMCell; static;
+    class function CreateFloat(Value: Double): TSVMCell; static;
+    class function CreateString(const Value: string): TSVMCell; static;
+    class function CreateAddr(Value: NativeInt): TSVMCell; static;
+
+    // Conversion and Access Methods
+    function AsFloat: Double;
+    function AsInt: Int64;
+    function AsString: string;
+
+    function ToString: string;
+    procedure Clear;
+  end;
+
+implementation
+
+{ TSVMCellHelper }
+
+class function TSVMCellHelper.CreateInt(Value: Int64): TSVMCell;
+begin
+  // Resetting to avoid garbage data from previous values in variant records
+  FillChar(Result, SizeOf(TSVMCell), 0);
+  Result.vType := vtInt;
+  Result.i := Value;
+end;
+
+class function TSVMCellHelper.CreateFloat(Value: Double): TSVMCell;
+begin
+  FillChar(Result, SizeOf(TSVMCell), 0);
+  Result.vType := vtFloat;
+  Result.f := Value;
+end;
+
+class function TSVMCellHelper.CreateString(const Value: string): TSVMCell;
+begin
+  FillChar(Result, SizeOf(TSVMCell), 0);
+  Result.vType := vtString;
+  Result.s := PChar(Value);
+end;
+
+class function TSVMCellHelper.CreateAddr(Value: NativeInt): TSVMCell;
+begin
+  FillChar(Result, SizeOf(TSVMCell), 0);
+  Result.vType := vtAddr;
+  Result.addr := Value;
+end;
+
+function TSVMCellHelper.AsFloat: Double;
+begin
+  case vType of
+    vtFloat:  Result := f;
+    vtInt:    Result := i * 1.0;
+    vtString: Result := StrToFloatDef(StrPas(s), 0.0, TFormatSettings.Invariant);
+    else      Result := 0.0;
+  end;
+end;
+
+function TSVMCellHelper.AsInt: Int64;
+begin
+  case vType of
+    vtInt:    Result := i;
+    vtFloat:  Result := Trunc(f);
+    vtString: Result := StrToInt64Def(StrPas(s), 0);
+    vtAddr:   Result := Int64(addr);
+    else      Result := 0;
+  end;
+end;
+
+function TSVMCellHelper.AsString: string;
+begin
+  { Safe string conversion for Native Bridge and Print commands }
+  if vType = vtString then
+    Result := StrPas(s)
+  else
+    Result := ToString;
+end;
+
+function TSVMCellHelper.ToString: string;
+begin
+  case vType of
+    vtInt:    Result := i.ToString;
+    vtFloat:  Result := FloatToStr(f, TFormatSettings.Invariant);
+    vtString: Result := StrPas(s);
+    vtAddr:   Result := '0x' + IntToHex(addr, 8);
+    vtObject: Result := '[Ref:' + IntToHex(NativeInt(obj), 8) + ']';
+    else      Result := 'NULL';
+  end;
+end;
+
+procedure TSVMCellHelper.Clear;
+begin
+  // Resets the cell to initial state
+  vType := vtNone;
+  i := 0;
+end;
+
+end.

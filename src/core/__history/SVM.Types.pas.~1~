@@ -1,0 +1,73 @@
+unit SVM_Types;
+
+interface
+
+uses
+  System.SysUtils;
+
+type
+  // Veri türleri
+  TValueType = (vtNone, vtInt, vtFloat, vtString, vtObject, vtAddr);
+
+  // Hücre yapýsý
+  TSVMCell = record
+    case vType: TValueType of
+      vtInt:    (i: Int64);
+      vtFloat:  (f: Double);
+      vtString: (s: PChar);      // Bellekteki metin
+      vtObject: (obj: Pointer);  // Nesne referansý
+      vtAddr:   (addr: NativeInt);
+  end;
+
+  // Hücreler üzerinde iþlem yapacak yardýmcý metodlar
+  TSVMCellHelper = record helper for TSVMCell
+    class function CreateInt(Value: Int64): TSVMCell; static;
+    class function CreateFloat(Value: Double): TSVMCell; static;
+    class function CreateString(const Value: string): TSVMCell; static;
+
+    function ToString: string;
+    procedure Clear; // Bellek temizliði (özellikle stringler için kritik)
+  end;
+
+implementation
+
+{ TSVMCellHelper }
+
+class function TSVMCellHelper.CreateInt(Value: Int64): TSVMCell;
+begin
+  Result.vType := vtInt;
+  Result.i := Value;
+end;
+
+class function TSVMCellHelper.CreateFloat(Value: Double): TSVMCell;
+begin
+  Result.vType := vtFloat;
+  Result.f := Value;
+end;
+
+class function TSVMCellHelper.CreateString(const Value: string): TSVMCell;
+begin
+  Result.vType := vtString;
+  // Delphi string'ini SVM'in anlayacaðý ham PChar'a dönüþtürüyoruz
+  Result.s := StrNew(PChar(Value));
+end;
+
+function TSVMCellHelper.ToString: string;
+begin
+  case vType of
+    vtInt:    Result := i.ToString;
+    vtFloat:  Result := FloatToStr(f);
+    vtString: Result := StrPas(s);
+    vtAddr:   Result := '@' + IntToHex(addr, 8);
+    else Result := 'Unknown';
+  end;
+end;
+
+procedure TSVMCellHelper.Clear;
+begin
+  if vType = vtString then
+    StrDispose(s); // PChar belleðini serbest býrak
+  vType := vtNone;
+end;
+
+end.
